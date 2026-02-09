@@ -1,0 +1,212 @@
+#root {
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 2rem;
+    text-align: center;
+}
+
+.container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 20px;
+    background-color: #1a1a1a;
+    padding: 40px;
+    border-radius: 20px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+
+.status-bar {
+    font-size: 1.2rem;
+    font-weight: bold;
+    color: #00ffcc;
+    padding: 10px 20px;
+    background: rgba(0, 255, 204, 0.1);
+    border-radius: 10px;
+    border: 1px solid rgba(0, 255, 204, 0.3);
+    display: flex;
+    align-items: center;
+    gap: 15px;
+}
+
+.indicator {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.9rem;
+    color: #888;
+    transition: color 0.3s;
+}
+
+.indicator.active {
+    color: #00ffcc;
+}
+
+.dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #444;
+    transition: background 0.2s, box-shadow 0.2s;
+}
+
+.indicator.active .dot {
+    background: #00ffcc;
+    box-shadow: 0 0 10px #00ffcc;
+}
+
+/* Specific indicator colors */
+.indicator.camera.active .dot { background: #ff00ff; box-shadow: 0 0 10px #ff00ff; }
+.indicator.mic.active .dot { background: #0099ff; box-shadow: 0 0 10px #0099ff; }
+.indicator.gemini.active .dot { background: #ffff00; box-shadow: 0 0 10px #ffff00; }
+.indicator.camera.active { color: #ff00ff; }
+.indicator.mic.active { color: #0099ff; }
+.indicator.gemini.active { color: #ffff00; }
+
+.audio-visualizer {
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+    height: 20px;
+    padding: 0 5px;
+}
+
+.bar {
+    width: 3px;
+    height: 30%;
+    background: #444;
+    transition: height 0.1s, background 0.1s;
+}
+
+.active .bar {
+    background: currentColor;
+}
+
+.video-container {
+    border: 4px solid #333;
+    border-radius: 16px;
+    overflow: hidden;
+    width: 640px;
+    height: 480px;
+    background: #000;
+    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+}
+
+.live-video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.controls button {
+    padding: 15px 40px;
+    font-size: 1.2rem;
+    font-weight: bold;
+    border-radius: 12px;
+    cursor: pointer;
+    border: none;
+    background: linear-gradient(135deg, #00ffcc, #0099ff);
+    color: #000;
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.controls button:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 5px 15px rgba(0, 255, 204, 0.4);
+}
+
+.stop-btn {
+    background: linear-gradient(135deg, #ff4444, #cc0000) !important;
+    color: white !important;
+}
+
+/* Debug Mode Styles */
+.debug-toggle {
+    position: fixed;
+    right: 20px;
+    top: 20px;
+    width: 50px;
+    height: 50px;
+    border-radius: 25px;
+    background: #333;
+    color: white;
+    border: 1px solid #444;
+    font-size: 1.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    z-index: 1000;
+    transition: background 0.2s;
+}
+
+.debug-toggle:hover {
+    background: #444;
+}
+
+.debug-panel {
+    position: fixed;
+    right: 20px;
+    top: 80px;
+    width: 350px;
+    max-height: 70vh;
+    background: rgba(0, 0, 0, 0.9);
+    backdrop-filter: blur(10px);
+    border: 1px solid #444;
+    border-radius: 12px;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    z-index: 1000;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    text-align: left;
+}
+
+.debug-panel h3 {
+    margin: 0;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #333;
+    font-size: 1rem;
+    color: #00ffcc;
+}
+
+.debug-scroll {
+    flex: 1;
+    overflow-y: auto;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 0.8rem;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding-right: 5px;
+}
+
+.debug-item {
+    color: #ccc;
+    line-height: 1.2;
+}
+
+.debug-item.success {
+    color: #00ff88;
+}
+
+.debug-item.error {
+    color: #ff5555;
+}
+
+.debug-item.warn {
+    color: #ffcc00;
+}
+
+.time {
+    color: #666;
+    margin-right: 5px;
+}
+
+.close-debug {
+    background: #333 !important;
+    color: #888 !important;
+    font-size: 0.8rem !important;
+    padding: 5px 10px !important;
+}
