@@ -43,7 +43,7 @@ async def google_proxy(client_ws: WebSocket):
         return
 
     trace(f"Handshaking with Gemini (Key: {key[:4]}...)")
-    gemini_url = f"wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key={key}"
+    gemini_url = f"wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key={key}"
 
     try:
         async with websockets.connect(gemini_url) as google_ws:
@@ -72,7 +72,7 @@ async def google_proxy(client_ws: WebSocket):
 
             setup_msg = {
                 "setup": {
-                    "model": "models/gemini-2.0-flash-exp", 
+                    "model": "models/gemini-2.5-flash-native-audio-latest", 
                     "generation_config": {
                         "response_modalities": ["AUDIO"],
                         "speech_config": {
@@ -215,6 +215,5 @@ async def google_proxy(client_ws: WebSocket):
 
 if __name__ == "__main__":
     import uvicorn
-    # Use dynamic port from environment variable if available
-    port = int(os.getenv("PORT", 8001))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    # Use standard 8001 port
+    uvicorn.run(app, host="0.0.0.0", port=8001)

@@ -129,7 +129,7 @@ function App() {
                 await audioContextRef.current.resume();
             }
 
-            const wsUrl = import.meta.env.VITE_WS_URL || `ws://localhost:8001/ws/google-proxy?mode=${interactionMode}`;
+            const wsUrl = `ws://localhost:8001/ws/google-proxy?mode=${interactionMode}`;
             addLog(`Connecting to WebSocket: ${wsUrl}`);
             wsRef.current = new WebSocket(wsUrl);
 
