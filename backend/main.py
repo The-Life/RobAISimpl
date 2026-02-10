@@ -24,6 +24,32 @@ def trace(msg):
         f.write(f"{msg}\n")
     print(msg)
 
+def normalize_live_payload(raw_text: str) -> str:
+    try:
+        data = json.loads(raw_text)
+    except Exception:
+        return raw_text
+
+    if "realtime_input" in data:
+        ri = data.pop("realtime_input") or {}
+        new_ri = {}
+        for chunk in ri.get("media_chunks", []):
+            mime = chunk.get("mime_type", "")
+            blob = {"mimeType": mime, "data": chunk.get("data", "")}
+            if mime.startswith("audio/"):
+                new_ri["audio"] = blob
+            elif mime.startswith("image/") or mime.startswith("video/"):
+                new_ri["video"] = blob
+        data["realtimeInput"] = new_ri
+
+    if "client_content" in data:
+        cc = data.pop("client_content") or {}
+        if "turn_complete" in cc:
+            cc["turnComplete"] = cc.pop("turn_complete")
+        data["clientContent"] = cc
+
+    return json.dumps(data)
+
 @app.websocket("/ws/google-proxy")
 async def google_proxy(client_ws: WebSocket):
     trace("ENTER google_proxy")
@@ -213,6 +239,119 @@ async def google_proxy(client_ws: WebSocket):
             pass
         print("Done.")
 
+@app.websocket("/ws/google-live")
+async def google_live_proxy(client_ws: WebSocket):
+    trace("ENTER google_live_proxy")
+    mode = client_ws.query_params.get("mode", "general")
+    trace(f"Selected Mode: {mode}")
+
+    await client_ws.accept()
+
+    key = os.getenv("GOOGLE_API_KEY")
+    if not key or "your_api_key" in key:
+        trace("ERROR: Missing or placeholder GOOGLE_API_KEY in .env")
+        await client_ws.send_text(json.dumps({"error": "Missing GOOGLE_API_KEY"}))
+        await client_ws.close(code=4003)
+        return
+
+    live_model = os.getenv("GEMINI_LIVE_MODEL", "models/gemini-2.0-flash-live-preview-04-09")
+    trace(f"Handshaking with Gemini Live (Model: {live_model})")
+    gemini_url = f"wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key={key}"
+
+    try:
+        async with websockets.connect(gemini_url) as google_ws:
+            trace("CONNECTED to Google Live API")
+
+            PROMPTS = {
+                "exercise": """
+                    You are RobAI, a specialized assembly assistant.
+                    Your goal is to guide the user through the "Ring Stack" exercise.
+                    Steps: 1. Large RED, 2. Medium BLUE, 3. Small YELLOW.
+                    Be strict but encouraging. Stop them if they pick the wrong color.
+                    Keep responses short and focused on the task.
+                    IMPORTANT: Wait until you actually SEE the objects before giving instructions.
+                """,
+                "general": """
+                    You are RobAI, a specialized vision-enabled assistant. 
+                    STRICT GROUNDING RULE: You MUST ONLY describe what is physically visible in the camera frame. 
+                    Do NOT guess background details or hallucinate objects (like trees or office equipment) if they are not clearly in view.
+                    If you are not confident the object is in the frame, explicitly say you are unsure.
+                    If the user asks about something you don't see, say: "I'm sorry, I'm not seeing that in my current visual feed."
+                    Never invent objects to be helpful.
+                    Be conversational but stay 100% anchored in the reality of the image stream.
+                    If the image is blurry, dark, or stale, mention that specifically.
+                """
+            }
+
+            setup_msg = {
+                "setup": {
+                    "model": live_model,
+                    "generation_config": {
+                        "response_modalities": ["AUDIO"],
+                        "speech_config": {
+                            "voice_config": {
+                                "prebuilt_voice_config": {
+                                    "voice_name": "Puck"
+                                }
+                            }
+                        }
+                    },
+                    "system_instruction": {
+                        "parts": [{"text": PROMPTS.get(mode, PROMPTS["general"])}]
+                    }
+                }
+            }
+
+            trace("Sending Live Setup...")
+            await google_ws.send(json.dumps(setup_msg))
+
+            init_response = await google_ws.recv()
+            trace(f"RECEIVED Live Setup Response: {init_response[:100]}")
+
+            await client_ws.send_text(json.dumps({"setupComplete": True}))
+
+            async def client_to_google():
+                trace("START live client_to_google")
+                try:
+                    while True:
+                        msg = await client_ws.receive()
+                        if "text" in msg:
+                            await google_ws.send(normalize_live_payload(msg["text"]))
+                        elif "bytes" in msg:
+                            await google_ws.send(msg["bytes"])
+                        else:
+                            break
+                except Exception as e:
+                    trace(f"ERROR live client_to_google: {e}")
+
+            async def google_to_client():
+                trace("START live google_to_client")
+                try:
+                    while True:
+                        data = await google_ws.recv()
+                        if isinstance(data, bytes):
+                            await client_ws.send_bytes(data)
+                        else:
+                            await client_ws.send_text(data)
+                except Exception as e:
+                    trace(f"ERROR live google_to_client: {e}")
+
+            await asyncio.gather(client_to_google(), google_to_client())
+            trace("Live Gather FINISHED")
+
+    except Exception as e:
+        err_str = str(e)
+        trace(f"Live CATCH block: {err_str}")
+        try:
+            await client_ws.send_text(json.dumps({"error": err_str}))
+        except:
+            pass
+    finally:
+        trace("EXIT google_live_proxy")
+        try:
+            await client_ws.close()
+        except:
+            pass
 if __name__ == "__main__":
     import uvicorn
     # Use standard 8001 port

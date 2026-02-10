@@ -17,6 +17,9 @@ function App() {
     const [interactionMode, setInteractionMode] = useState("general"); // exercise | general
     const [lowResMode, setLowResMode] = useState(false);
     const [allowBargeIn, setAllowBargeIn] = useState(false);
+    const [visionSyncEnabled, setVisionSyncEnabled] = useState(true);
+    const [visionSyncMs, setVisionSyncMs] = useState(2000);
+    const [useLiveApi, setUseLiveApi] = useState(false);
 
     const videoRef = useRef(null);
     const canvasRef = useRef(null);
@@ -44,15 +47,18 @@ function App() {
     const isVideoOnRef = useRef(true);
     const lowResModeRef = useRef(false);
     const allowBargeInRef = useRef(false);
+    const useLiveApiRef = useRef(false);
     const isUserSpeakingRef = useRef(false);
     const lastVoiceTimeRef = useRef(0);
     const suspendAudioUntilRef = useRef(0);
     const suspendVideoUntilRef = useRef(0);
     const testFrameInFlightRef = useRef(false);
+    const visionSyncTimerRef = useRef(null);
 
     const VIDEO_CONFIG = {
         low: { width: 320, height: 240, fps: 2, jpegQuality: 0.7 },
         normal: { width: 640, height: 480, fps: 5, jpegQuality: 0.8 },
+        live: { width: 640, height: 480, fps: 1, jpegQuality: 0.8 },
     };
 
     const VAD = {
@@ -103,6 +109,19 @@ function App() {
         addLog(`Barge-in ${newState ? "enabled" : "disabled"}`);
     };
 
+    const toggleVisionSync = () => {
+        const newState = !visionSyncEnabled;
+        setVisionSyncEnabled(newState);
+        addLog(`Vision sync ${newState ? "enabled" : "disabled"} (${visionSyncMs} ms)`);
+    };
+
+    const toggleLiveApi = () => {
+        const newState = !useLiveApi;
+        setUseLiveApi(newState);
+        useLiveApiRef.current = newState;
+        addLog(`Live API ${newState ? "enabled" : "disabled"} (video at 1 FPS)`);
+    };
+
     const addLog = (msg, type = 'info') => {
         const timestamp = new Date().toLocaleTimeString();
         setDebugLogs(prev => [...prev.slice(-49), { timestamp, msg, type }]);
@@ -129,7 +148,8 @@ function App() {
                 await audioContextRef.current.resume();
             }
 
-            const wsUrl = `ws://localhost:8001/ws/google-proxy?mode=${interactionMode}`;
+            const wsPath = useLiveApiRef.current ? "google-live" : "google-proxy";
+            const wsUrl = `ws://localhost:8001/ws/${wsPath}?mode=${interactionMode}`;
             addLog(`Connecting to WebSocket: ${wsUrl}`);
             wsRef.current = new WebSocket(wsUrl);
 
@@ -213,9 +233,69 @@ function App() {
         };
     }, [isConnected, isGeminiReady]);
 
+    const sendVisionSyncFrame = () => {
+        try {
+            if (!visionSyncEnabled) return;
+            if (testFrameInFlightRef.current) return;
+            if (!videoRef.current || !canvasRef.current || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+            if (!isGeminiReadyRef.current) return;
+            if (!isVideoOnRef.current) return;
+
+            const cfg = useLiveApiRef.current
+                ? VIDEO_CONFIG.live
+                : (lowResModeRef.current ? VIDEO_CONFIG.low : VIDEO_CONFIG.normal);
+            const ctx = canvasRef.current.getContext('2d', { alpha: false });
+            if (canvasRef.current.width !== cfg.width) canvasRef.current.width = cfg.width;
+            if (canvasRef.current.height !== cfg.height) canvasRef.current.height = cfg.height;
+            ctx.drawImage(videoRef.current, 0, 0, cfg.width, cfg.height);
+            const base64 = canvasRef.current.toDataURL("image/jpeg", cfg.jpegQuality).split(',')[1];
+
+            const syncMsg = {
+                client_content: {
+                    turns: [{
+                        role: "user",
+                        parts: [
+                            {
+                                inlineData: {
+                                    mimeType: "image/jpeg",
+                                    data: base64
+                                }
+                            }
+                        ]
+                    }],
+                    // Do not complete the turn to avoid forcing a response.
+                    turn_complete: false
+                }
+            };
+            wsRef.current.send(JSON.stringify(syncMsg));
+        } catch (err) {
+            addLog(`Vision sync error: ${err.message}`, "error");
+        }
+    };
+
+    useEffect(() => {
+        if (visionSyncTimerRef.current) {
+            clearInterval(visionSyncTimerRef.current);
+            visionSyncTimerRef.current = null;
+        }
+        if (isConnected && isGeminiReady && visionSyncEnabled) {
+            visionSyncTimerRef.current = setInterval(() => {
+                sendVisionSyncFrame();
+            }, visionSyncMs);
+        }
+        return () => {
+            if (visionSyncTimerRef.current) {
+                clearInterval(visionSyncTimerRef.current);
+                visionSyncTimerRef.current = null;
+            }
+        };
+    }, [isConnected, isGeminiReady, visionSyncEnabled, visionSyncMs]);
+
     const startMedia = async () => {
         try {
-            const cfg = lowResModeRef.current ? VIDEO_CONFIG.low : VIDEO_CONFIG.normal;
+            const cfg = useLiveApiRef.current
+                ? VIDEO_CONFIG.live
+                : (lowResModeRef.current ? VIDEO_CONFIG.low : VIDEO_CONFIG.normal);
             addLog("Requesting Camera & Microphone access...");
             const stream = await navigator.mediaDevices.getUserMedia({
                 audio: {
@@ -424,7 +504,9 @@ function App() {
 
                 setIsCameraActive(true);
                 const ctx = canvasRef.current.getContext('2d', { alpha: false });
-                const activeCfg = lowResModeRef.current ? VIDEO_CONFIG.low : VIDEO_CONFIG.normal;
+                const activeCfg = useLiveApiRef.current
+                    ? VIDEO_CONFIG.live
+                    : (lowResModeRef.current ? VIDEO_CONFIG.low : VIDEO_CONFIG.normal);
                 if (canvasRef.current.width !== activeCfg.width) canvasRef.current.width = activeCfg.width;
                 if (canvasRef.current.height !== activeCfg.height) canvasRef.current.height = activeCfg.height;
                 ctx.drawImage(videoRef.current, 0, 0, activeCfg.width, activeCfg.height);
@@ -460,7 +542,10 @@ function App() {
                 setTimeout(() => setIsCameraActive(false), 200);
 
                 // Reliability: Dynamic delay based on connection state
-                const delay = Math.max(1000 / (lowResModeRef.current ? VIDEO_CONFIG.low.fps : VIDEO_CONFIG.normal.fps), 200);
+                const fps = useLiveApiRef.current
+                    ? VIDEO_CONFIG.live.fps
+                    : (lowResModeRef.current ? VIDEO_CONFIG.low.fps : VIDEO_CONFIG.normal.fps);
+                const delay = Math.max(1000 / fps, 200);
                 setTimeout(captureFrame, delay);
             };
 
@@ -655,7 +740,9 @@ function App() {
             testFrameInFlightRef.current = true;
             suspendAudioUntilRef.current = Date.now() + 2000;
             suspendVideoUntilRef.current = Date.now() + 1200;
-            const cfg = lowResModeRef.current ? VIDEO_CONFIG.low : VIDEO_CONFIG.normal;
+            const cfg = useLiveApiRef.current
+                ? VIDEO_CONFIG.live
+                : (lowResModeRef.current ? VIDEO_CONFIG.low : VIDEO_CONFIG.normal);
             const ctx = canvasRef.current.getContext('2d', { alpha: false });
             if (canvasRef.current.width !== cfg.width) canvasRef.current.width = cfg.width;
             if (canvasRef.current.height !== cfg.height) canvasRef.current.height = cfg.height;
@@ -763,6 +850,30 @@ function App() {
                 >
                     {allowBargeIn ? "🛑 Barge-in On" : "✅ Barge-in Off"}
                 </button>
+                <button
+                    onClick={toggleVisionSync}
+                    className={visionSyncEnabled ? "warn-btn" : ""}
+                    disabled={!hasMedia}
+                >
+                    {visionSyncEnabled ? "👁️ Vision Sync On" : "👁️ Vision Sync Off"}
+                </button>
+                <button
+                    onClick={toggleLiveApi}
+                    className={useLiveApi ? "warn-btn" : ""}
+                    disabled={isConnected}
+                >
+                    {useLiveApi ? "⚡ Live API On" : "⚡ Live API Off"}
+                </button>
+                <select
+                    value={visionSyncMs}
+                    onChange={(e) => setVisionSyncMs(Number(e.target.value))}
+                    disabled={!hasMedia}
+                >
+                    <option value={1000}>Sync 1s</option>
+                    <option value={2000}>Sync 2s</option>
+                    <option value={3000}>Sync 3s</option>
+                    <option value={5000}>Sync 5s</option>
+                </select>
                 <button onClick={sendTestFrame} disabled={!isConnected}>
                     🧪 Send Test Frame
                 </button>
