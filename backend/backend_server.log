@@ -1,0 +1,42 @@
+INFO:     Started server process [82887]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8001 (Press CTRL+C to quit)
+INFO:     127.0.0.1:50201 - "WebSocket /ws/google-proxy?mode=general" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     127.0.0.1:50334 - "WebSocket /ws/google-proxy?mode=general" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     127.0.0.1:50487 - "WebSocket /ws/google-proxy?mode=general" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     127.0.0.1:50635 - "WebSocket /ws/google-proxy?mode=general" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     127.0.0.1:52756 - "WebSocket /ws/google-proxy?mode=general" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     127.0.0.1:53112 - "WebSocket /ws/google-proxy?mode=general" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     127.0.0.1:53572 - "WebSocket /ws/google-proxy?mode=general" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     127.0.0.1:53704 - "WebSocket /ws/google-proxy?mode=general" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     127.0.0.1:54146 - "WebSocket /ws/google-proxy?mode=general" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     127.0.0.1:56108 - "WebSocket /ws/google-proxy?mode=general" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     127.0.0.1:56577 - "WebSocket /ws/google-proxy?mode=general" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     Shutting down
+INFO:     Waiting for background tasks to complete. (CTRL+C to force quit)
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [82887]
