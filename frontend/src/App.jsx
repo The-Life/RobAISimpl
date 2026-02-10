@@ -17,6 +17,8 @@ function App() {
     const [interactionMode, setInteractionMode] = useState("general"); // exercise | general
     const [lowResMode, setLowResMode] = useState(false);
     const [allowBargeIn, setAllowBargeIn] = useState(false);
+    const [visionSyncEnabled, setVisionSyncEnabled] = useState(true);
+    const [visionSyncMs, setVisionSyncMs] = useState(2000);
 
     const videoRef = useRef(null);
     const canvasRef = useRef(null);
@@ -49,6 +51,7 @@ function App() {
     const suspendAudioUntilRef = useRef(0);
     const suspendVideoUntilRef = useRef(0);
     const testFrameInFlightRef = useRef(false);
+    const visionSyncTimerRef = useRef(null);
 
     const VIDEO_CONFIG = {
         low: { width: 320, height: 240, fps: 2, jpegQuality: 0.7 },
@@ -101,6 +104,12 @@ function App() {
         setAllowBargeIn(newState);
         allowBargeInRef.current = newState;
         addLog(`Barge-in ${newState ? "enabled" : "disabled"}`);
+    };
+
+    const toggleVisionSync = () => {
+        const newState = !visionSyncEnabled;
+        setVisionSyncEnabled(newState);
+        addLog(`Vision sync ${newState ? "enabled" : "disabled"} (${visionSyncMs} ms)`);
     };
 
     const addLog = (msg, type = 'info') => {
@@ -212,6 +221,62 @@ function App() {
             if (autoPokeTimerRef.current) clearInterval(autoPokeTimerRef.current);
         };
     }, [isConnected, isGeminiReady]);
+
+    const sendVisionSyncFrame = () => {
+        try {
+            if (!visionSyncEnabled) return;
+            if (testFrameInFlightRef.current) return;
+            if (!videoRef.current || !canvasRef.current || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+            if (!isGeminiReadyRef.current) return;
+            if (!isVideoOnRef.current) return;
+
+            const cfg = lowResModeRef.current ? VIDEO_CONFIG.low : VIDEO_CONFIG.normal;
+            const ctx = canvasRef.current.getContext('2d', { alpha: false });
+            if (canvasRef.current.width !== cfg.width) canvasRef.current.width = cfg.width;
+            if (canvasRef.current.height !== cfg.height) canvasRef.current.height = cfg.height;
+            ctx.drawImage(videoRef.current, 0, 0, cfg.width, cfg.height);
+            const base64 = canvasRef.current.toDataURL("image/jpeg", cfg.jpegQuality).split(',')[1];
+
+            const syncMsg = {
+                client_content: {
+                    turns: [{
+                        role: "user",
+                        parts: [
+                            {
+                                inlineData: {
+                                    mimeType: "image/jpeg",
+                                    data: base64
+                                }
+                            }
+                        ]
+                    }],
+                    // Do not complete the turn to avoid forcing a response.
+                    turn_complete: false
+                }
+            };
+            wsRef.current.send(JSON.stringify(syncMsg));
+        } catch (err) {
+            addLog(`Vision sync error: ${err.message}`, "error");
+        }
+    };
+
+    useEffect(() => {
+        if (visionSyncTimerRef.current) {
+            clearInterval(visionSyncTimerRef.current);
+            visionSyncTimerRef.current = null;
+        }
+        if (isConnected && isGeminiReady && visionSyncEnabled) {
+            visionSyncTimerRef.current = setInterval(() => {
+                sendVisionSyncFrame();
+            }, visionSyncMs);
+        }
+        return () => {
+            if (visionSyncTimerRef.current) {
+                clearInterval(visionSyncTimerRef.current);
+                visionSyncTimerRef.current = null;
+            }
+        };
+    }, [isConnected, isGeminiReady, visionSyncEnabled, visionSyncMs]);
 
     const startMedia = async () => {
         try {
@@ -763,6 +828,23 @@ function App() {
                 >
                     {allowBargeIn ? "🛑 Barge-in On" : "✅ Barge-in Off"}
                 </button>
+                <button
+                    onClick={toggleVisionSync}
+                    className={visionSyncEnabled ? "warn-btn" : ""}
+                    disabled={!hasMedia}
+                >
+                    {visionSyncEnabled ? "👁️ Vision Sync On" : "👁️ Vision Sync Off"}
+                </button>
+                <select
+                    value={visionSyncMs}
+                    onChange={(e) => setVisionSyncMs(Number(e.target.value))}
+                    disabled={!hasMedia}
+                >
+                    <option value={1000}>Sync 1s</option>
+                    <option value={2000}>Sync 2s</option>
+                    <option value={3000}>Sync 3s</option>
+                    <option value={5000}>Sync 5s</option>
+                </select>
                 <button onClick={sendTestFrame} disabled={!isConnected}>
                     🧪 Send Test Frame
                 </button>
