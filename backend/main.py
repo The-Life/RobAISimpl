@@ -19,52 +19,60 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+def trace(msg):
+    with open("/tmp/robai_backend.log", "a") as f:
+        f.write(f"{msg}\n")
+    print(msg)
+
 @app.websocket("/ws/google-proxy")
 async def google_proxy(client_ws: WebSocket):
-    """
-    Bi-directional proxy between Client (React) and Google Gemini Live API.
-    """
+    trace("ENTER google_proxy")
+    # Get mode from query params
+    mode = client_ws.query_params.get("mode", "general")
+    trace(f"Selected Mode: {mode}")
+    
     await client_ws.accept()
     
-    # Refresh env
-    load_dotenv(override=True)
+    # 1. Load API Key
     key = os.getenv("GOOGLE_API_KEY")
     
-    if not key or key == "your_api_key_here":
-        print(f"Error: GOOGLE_API_KEY placeholder or missing. Found: {key[:4] if key else 'None'}...")
+    if not key or "your_api_key" in key:
+        trace("ERROR: Missing or placeholder GOOGLE_API_KEY in .env")
+        await client_ws.send_text(json.dumps({"error": "Missing GOOGLE_API_KEY"}))
         await client_ws.close(code=4003)
         return
 
-    print(f"Client connected. Using API Key starting with: {key[:4]}...")
+    trace(f"Handshaking with Gemini (Key: {key[:4]}...)")
     gemini_url = f"wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key={key}"
 
     try:
-        # Connect to Google
         async with websockets.connect(gemini_url) as google_ws:
-            print("Connected to Gemini Live API")
+            trace("CONNECTED to Google")
 
-            # Setup initial config
-            sys_prompt = """
-            You are RobAI, an active AI robot repair assistant.
-            You have eyes (video) and ears (audio).
-            Your goal is to guide the user through assembling a "Ring Stack".
-            
-            THE ASSEMBLY STEPS:
-            1. Place the large RED ring on the base.
-            2. Place the medium BLUE ring on top of the red ring.
-            3. Place the small YELLOW ring on top of the blue ring.
-            
-            INSTRUCTIONS:
-            - Watch the video stream continuously.
-            - If the user picks up the wrong ring, STOP THEM immediately: "No, that's the blue one. Find the RED one first."
-            - If they succeed, confirm it warmly: "Perfect. Now grab the blue ring."
-            - Be concise. Speak like a helpful workshop partner. Don't lecture.
-            - If you see nothing, ask "Show me the parts."
-            """
+            PROMPTS = {
+                "exercise": """
+                    You are RobAI, a specialized assembly assistant.
+                    Your goal is to guide the user through the "Ring Stack" exercise.
+                    Steps: 1. Large RED, 2. Medium BLUE, 3. Small YELLOW.
+                    Be strict but encouraging. Stop them if they pick the wrong color.
+                    Keep responses short and focused on the task.
+                    IMPORTANT: Wait until you actually SEE the objects before giving instructions.
+                """,
+                "general": """
+                    You are RobAI, a specialized vision-enabled assistant. 
+                    STRICT GROUNDING RULE: You MUST ONLY describe what is physically visible in the camera frame. 
+                    Do NOT guess background details or hallucinate objects (like trees or office equipment) if they are not clearly in view.
+                    If you are not confident the object is in the frame, explicitly say you are unsure.
+                    If the user asks about something you don't see, say: "I'm sorry, I'm not seeing that in my current visual feed."
+                    Never invent objects to be helpful.
+                    Be conversational but stay 100% anchored in the reality of the image stream.
+                    If the image is blurry, dark, or stale, mention that specifically.
+                """
+            }
 
-            await google_ws.send(json.dumps({
+            setup_msg = {
                 "setup": {
-                    "model": "models/gemini-2.5-flash-native-audio-latest", 
+                    "model": "models/gemini-2.0-flash-exp", 
                     "generation_config": {
                         "response_modalities": ["AUDIO"],
                         "speech_config": {
@@ -76,72 +84,137 @@ async def google_proxy(client_ws: WebSocket):
                         }
                     },
                     "system_instruction": {
-                        "parts": [
-                            {"text": sys_prompt}
-                        ]
+                        "parts": [{"text": PROMPTS.get(mode, PROMPTS["general"])}]
                     }
                 }
-            }))
-            
-            # Wait for setup completion
-            init_response = await google_ws.recv()
-            print(f"Gemini Setup Response: {init_response}")
-            
-            # Forward setup response to client so they know we are ready
-            if isinstance(init_response, bytes):
-                await client_ws.send_bytes(init_response)
-            else:
-                await client_ws.send_text(init_response)
-
-            # --- TRIGGER MESSAGE ---
-            # Send an initial hidden prompt to Gemini to force it to start speaking
-            # This helps if the model is waiting for a first turn.
-            trigger_msg = {
-                "client_content": {
-                    "turns": [
-                        {"role": "user", "parts": [{"text": "Hello RobAI, please start the session."}]}
-                    ],
-                    "turn_complete": True
-                }
             }
-            await google_ws.send(json.dumps(trigger_msg))
-            # -----------------------
+
+            trace(f"Sending Setup (Model: {setup_msg['setup']['model']})...")
+            await google_ws.send(json.dumps(setup_msg))
+            
+            init_response = await google_ws.recv()
+            trace(f"RECEIVED Setup Response: {init_response[:100]}")
+            
+            # Check for immediate quota or setup errors in setup response
+            try:
+                setup_data = json.loads(init_response)
+                if "error" in setup_data:
+                    err_msg = setup_data["error"].get("message", "")
+                    if "quota" in err_msg.lower():
+                        trace("QUOTA EXCEEDED detected in Setup Response")
+                        await client_ws.send_text(json.dumps({"error": "QUOTA_EXCEEDED"}))
+                        return
+            except: pass
+
+            await client_ws.send_text(json.dumps({"setupComplete": True}))
+
+            trace("Setup Complete. Waiting for media...")
 
             async def client_to_google():
+                trace("START client_to_google")
+                chunk_count = 0
+                image_count = 0
+                audio_count = 0
                 try:
                     while True:
-                        data = await client_ws.receive_text()
-                        print(f"Client -> Google (size {len(data)})") # Log first 100 chars
-                        await google_ws.send(data)
+                        msg = await client_ws.receive()
+                        chunk_count += 1
+                        
+                        # Logging for verification
+                        if chunk_count % 50 == 0:
+                            if "text" in msg:
+                                try:
+                                    data = json.loads(msg["text"])
+                                    if "realtime_input" in data:
+                                        media = data["realtime_input"].get("media_chunks", [{}])[0]
+                                        mime = media.get("mime_type", "unknown")
+                                        size = len(media.get("data", ""))
+                                        trace(f"Media Stream: Received chunk {chunk_count} ({mime}, {size/1024:.1f} KB)")
+                                except: pass
+                        if "text" in msg:
+                            try:
+                                data = json.loads(msg["text"])
+                                if "realtime_input" in data:
+                                    for media in data["realtime_input"].get("media_chunks", []):
+                                        mime = media.get("mime_type", "unknown")
+                                        size = len(media.get("data", ""))
+                                        if mime.startswith("image/"):
+                                            image_count += 1
+                                            if image_count % 25 == 0:
+                                                trace(f"Image Stream: Received {image_count} images (last {size/1024:.1f} KB)")
+                                        if mime.startswith("audio/"):
+                                            audio_count += 1
+                                            if audio_count % 50 == 0:
+                                                trace(f"Audio Stream: Received {audio_count} audio chunks (last {size/1024:.1f} KB)")
+                            except:
+                                pass
+
+                        if "text" in msg:
+                            await google_ws.send(msg["text"])
+                        elif "bytes" in msg:
+                            await google_ws.send(msg["bytes"])
+                        else:
+                            trace("client_ws.receive() returned non-data")
+                            break
                 except Exception as e:
-                    print(f"Client->Google Error: {e}")
+                    trace(f"ERROR client_to_google: {e}")
 
             async def google_to_client():
+                trace("START google_to_client")
                 try:
                     while True:
                         data = await google_ws.recv()
-                        # Log response type and size
-                        print(f"Google -> Client: {type(data)} {len(data) if data else 0} bytes/chars")
-                        
                         if isinstance(data, bytes):
                             await client_ws.send_bytes(data)
                         else:
+                            try:
+                                resp_json = json.loads(data)
+                                if "serverContent" in resp_json:
+                                    sc = resp_json["serverContent"]
+                                    if "interrupted" in sc:
+                                        trace("Gemini Interrupted Signal Received")
+                                    if "modelTurn" in sc:
+                                        parts = sc["modelTurn"].get("parts", [])
+                                        for p in parts:
+                                            if "text" in p:
+                                                trace(f"Gemini Speech: {p['text']}")
+                                    if "turnComplete" in sc:
+                                        trace("Gemini Turn Complete")
+                            except:
+                                pass
                             await client_ws.send_text(data)
                 except Exception as e:
-                    print(f"Google->Client Error: {e}")
+                    trace(f"ERROR google_to_client: {e}")
 
-            # Run both tasks purely concurrently
+            # Run both tasks
             await asyncio.gather(client_to_google(), google_to_client())
+            trace("Gather FINISHED")
 
     except Exception as e:
-        print(f"Proxy Connection Error: {e}")
+        err_str = str(e)
+        trace(f"CATCH block: {err_str}")
+        import traceback
+        trace(traceback.format_exc())
+        
+        # Specific quota error detection
+        if "quota" in err_str.lower():
+            try:
+                await client_ws.send_text(json.dumps({"error": "QUOTA_EXCEEDED"}))
+            except: pass
+        else:
+            try:
+                await client_ws.send_text(json.dumps({"error": err_str}))
+            except: pass
     finally:
+        trace("EXIT google_proxy")
         try:
             await client_ws.close()
         except:
             pass
-        print("Client disconnected")
+        print("Done.")
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    # Use dynamic port from environment variable if available
+    port = int(os.getenv("PORT", 8001))
+    uvicorn.run(app, host="0.0.0.0", port=port)
